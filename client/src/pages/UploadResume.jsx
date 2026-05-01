@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '@clerk/clerk-react';
 import axios from 'axios';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5957';
 
 export default function UploadResume() {
   const navigate = useNavigate();
+  const { getToken } = useAuth();
   const [form, setForm] = useState({
     name: '',
     email: '',
@@ -20,6 +22,7 @@ export default function UploadResume() {
   const [extractedSkills, setExtractedSkills] = useState([]);
   const [suggestedJobs, setSuggestedJobs] = useState([]);
   const [uploadedResumeId, setUploadedResumeId] = useState(null);
+  const [uploadedResumeUrl, setUploadedResumeUrl] = useState(null);
   const [appliedJobIds, setAppliedJobIds] = useState([]);
   const [applyingTo, setApplyingTo] = useState(null);
   const [debugInfo, setDebugInfo] = useState(null);
@@ -70,6 +73,9 @@ export default function UploadResume() {
 
       if (response.data.data) {
         setUploadedResumeId(response.data.data._id);
+        if (response.data.data.filePath) {
+          setUploadedResumeUrl(response.data.data.filePath);
+        }
         if (response.data.data.skills) {
           setExtractedSkills(response.data.data.skills);
         }
@@ -98,8 +104,24 @@ export default function UploadResume() {
       await axios.patch(`${API_URL}/api/resumes/${uploadedResumeId}/apply`, {
         positionTitle: jobTitle
       });
+
+      const token = await getToken();
+      await fetch(`${API_URL}/api/applications`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          jobId,
+          resumeUrl: uploadedResumeUrl || 'Applied via Quick Apply',
+          coverLetter: 'Applied via Upload Resume AI Matcher.',
+          extractedSkills: extractedSkills
+        })
+      });
+
       setAppliedJobIds(prev => [...prev, jobId]);
-      setSuccess(`✅ Automatically selected! Your 1st round AI exam for ${jobTitle} has been scheduled. Check your email for calendar details.`);
+      setSuccess(`✅ Automatically applied! You are now visible to the employer for the ${jobTitle} position.`);
     } catch (err) {
       setError(err.response?.data?.message || '❌ Failed to apply. Please try again.');
     } finally {

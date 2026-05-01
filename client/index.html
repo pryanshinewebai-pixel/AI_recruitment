@@ -5,6 +5,28 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>HireVision | AI Recruitment Platform</title>
+
+    <!-- Preload critical fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
+    <!-- Prevent flash of unstyled content -->
+    <style>
+      /* Hide content until fonts are loaded */
+      body {
+        opacity: 0;
+        transition: opacity 0.3s ease-in;
+      }
+
+      body.fonts-loaded {
+        opacity: 1;
+      }
+
+      /* Prevent layout shift */
+      * {
+        box-sizing: border-box;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

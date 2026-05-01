@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
+import EmployerDashboard from './EmployerDashboard';
 import { 
   LayoutDashboard, 
   Search, 
@@ -17,6 +18,8 @@ import {
 } from 'lucide-react';
 import { useUser, useAuth } from '@clerk/clerk-react';
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5957';
+
 export default function Dashboard() {
   const { user } = useUser();
   const { getToken } = useAuth();
@@ -28,9 +31,88 @@ export default function Dashboard() {
   const [selectedJob, setSelectedJob] = useState(null);
   const [activeSessions, setActiveSessions] = useState([]);
   const [loadingSessions, setLoadingSessions] = useState(true);
+  const [userRole, setUserRole] = useState(null);
+  const [appliedJobs, setAppliedJobs] = useState([]);
+  const [applyingJobId, setApplyingJobId] = useState(null);
+
+  // Apply Modal State
+  const [showApplyModal, setShowApplyModal] = useState(false);
+  const [jobToApply, setJobToApply] = useState(null);
+  const [applyForm, setApplyForm] = useState({ name: '', email: '', phone: '' });
+  const [applyFile, setApplyFile] = useState(null);
+  const [isApplying, setIsApplying] = useState(false);
+
+  const handleApplyClick = (job) => {
+    setJobToApply(job);
+    setApplyForm({ ...applyForm, name: user?.fullName || '', email: user?.primaryEmailAddress?.emailAddress || '' });
+    setShowApplyModal(true);
+  };
+
+  const handleApplySubmit = async (e) => {
+    e.preventDefault();
+    if (!applyFile) return alert("Please select a resume file.");
+    
+    setIsApplying(true);
+    try {
+      const formData = new FormData();
+      formData.append('name', applyForm.name);
+      formData.append('email', applyForm.email);
+      formData.append('phone', applyForm.phone);
+      formData.append('position', jobToApply.title);
+      formData.append('resume', applyFile);
+
+      // 1. Upload resume to trigger AI processing
+      const resResume = await fetch(`${API_URL}/api/resumes`, {
+        method: 'POST',
+        body: formData
+      });
+      const resumeData = await resResume.json();
+
+      let extractedSkills = [];
+      let resumeUrl = 'Uploaded via Modal';
+
+      if (resumeData.data) {
+        if (resumeData.data.filePath) resumeUrl = resumeData.data.filePath;
+        if (resumeData.data.skills) extractedSkills = resumeData.data.skills;
+      }
+
+      // 2. Submit formal application linked to job
+      const token = await getToken();
+      const resApp = await fetch(`${API_URL}/api/applications`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          jobId: jobToApply._id,
+          resumeUrl,
+          coverLetter: 'Applied directly from Dashboard.',
+          extractedSkills
+        })
+      });
+
+      if (resApp.ok) {
+        setAppliedJobs([...appliedJobs, jobToApply._id]);
+        setShowApplyModal(false);
+        setJobToApply(null);
+        setApplyForm({ name: '', email: '', phone: '' });
+        setApplyFile(null);
+        alert("Application submitted successfully!");
+      } else {
+        alert("Failed to submit application.");
+      }
+    } catch (error) {
+      console.error(error);
+      alert("Error applying for the job.");
+    } finally {
+      setIsApplying(false);
+    }
+  };
+
 
   useEffect(() => {
-    fetch('http://localhost:5957/api/jobs')
+    fetch(`${API_URL}/api/jobs`)
       .then(res => res.json())
       .then(data => {
         setAllJobs(data);
@@ -44,23 +126,59 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    const checkRole = async () => {
+    const checkAndInitRole = async () => {
       try {
         const token = await getToken();
-        const res = await fetch('http://localhost:5957/api/users/profile', {
+        let currentRole = null;
+        let dbRole = null;
+
+        // 1. Fetch profile FIRST to ensure user exists in DB and get their current status
+        const res = await fetch(`${API_URL}/api/users/profile`, {
           headers: { Authorization: `Bearer ${token}` }
         });
+        
         if (res.ok) {
           const data = await res.json();
           if (data.isAdmin) {
             navigate('/admin');
+            return;
           }
+          dbRole = data.role;
         }
+
+        // 2. Check if we have an intended role from RoleSelectionPage
+        const intendedRole = localStorage.getItem('intendedRole');
+        if (intendedRole) {
+          // Send to backend to update the newly created/existing user
+          const roleRes = await fetch(`${API_URL}/api/users/role`, {
+            method: 'PUT',
+            headers: { 
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}` 
+            },
+            body: JSON.stringify({ role: intendedRole })
+          });
+          
+          if (roleRes.ok) {
+            currentRole = intendedRole;
+          }
+          localStorage.removeItem('intendedRole'); // clear it
+        }
+
+        // 3. Set the final role state
+        if (currentRole) {
+          setUserRole(currentRole);
+        } else if (dbRole) {
+          setUserRole(dbRole);
+        } else {
+          setUserRole('candidate'); // Default
+        }
+
       } catch (err) {
         console.error('Error checking user role:', err);
       }
     };
-    checkRole();
+    checkAndInitRole();
   }, [getToken, navigate]);
 
   useEffect(() => {
@@ -68,7 +186,7 @@ export default function Dashboard() {
       try {
         const token = await getToken();
         if (!token) return;
-        const res = await fetch('http://localhost:5957/api/users/profile/sessions', {
+        const res = await fetch(`${API_URL}/api/users/profile/sessions`, {
            headers: { Authorization: `Bearer ${token}` }
         });
         if (res.ok) {
@@ -92,24 +210,45 @@ export default function Dashboard() {
           <div className="p-10 space-y-12 flex-grow">
             <div className="space-y-4">
               <p className="px-4 text-[10px] font-black text-[var(--color-text-muted)] uppercase tracking-[0.3em] mb-6">Navigation</p>
-              {[
-                { icon: LayoutDashboard, label: "Overview" },
-                { icon: Briefcase, label: "Jobs" },
-                { icon: Calendar, label: "Preparation" },
-                { icon: CheckCircle2, label: "Applications" },
-              ].map((item, i) => (
-                <button 
-                  key={i} 
-                  onClick={() => setActiveView(item.label)}
-                  className={`w-full flex items-center gap-4 px-6 py-4 rounded-2xl transition-all duration-300 group
-                    ${activeView === item.label 
-                      ? 'bg-[var(--color-accent)] text-white shadow-lg shadow-blue-500/20' 
-                      : 'text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-heading)]'}`}
-                >
-                  <item.icon className={`w-5 h-5 shrink-0 ${activeView === item.label ? 'animate-pulse' : 'opacity-60 group-hover:opacity-100'}`} />
-                  <span className="font-black text-xs uppercase tracking-widest">{item.label}</span>
-                </button>
-              ))}
+              {userRole === 'employer' ? (
+                [
+                  { icon: LayoutDashboard, label: "Overview" },
+                  { icon: Briefcase, label: "Jobs" },
+                  { icon: Calendar, label: "Interviews" },
+                  { icon: CheckCircle2, label: "Candidates" },
+                ].map((item, i) => (
+                  <button 
+                    key={i} 
+                    onClick={() => setActiveView(item.label)}
+                    className={`w-full flex items-center gap-4 px-6 py-4 rounded-2xl transition-all duration-300 group
+                      ${activeView === item.label 
+                        ? 'bg-[var(--color-accent)] text-white shadow-lg shadow-blue-500/20' 
+                        : 'text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-heading)]'}`}
+                  >
+                    <item.icon className={`w-5 h-5 shrink-0 ${activeView === item.label ? 'animate-pulse' : 'opacity-60 group-hover:opacity-100'}`} />
+                    <span className="font-black text-xs uppercase tracking-widest">{item.label}</span>
+                  </button>
+                ))
+              ) : (
+                [
+                  { icon: LayoutDashboard, label: "Overview" },
+                  { icon: Briefcase, label: "Jobs" },
+                  { icon: Calendar, label: "Preparation" },
+                  { icon: CheckCircle2, label: "Applications" },
+                ].map((item, i) => (
+                  <button 
+                    key={i} 
+                    onClick={() => setActiveView(item.label)}
+                    className={`w-full flex items-center gap-4 px-6 py-4 rounded-2xl transition-all duration-300 group
+                      ${activeView === item.label 
+                        ? 'bg-[var(--color-accent)] text-white shadow-lg shadow-blue-500/20' 
+                        : 'text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-heading)]'}`}
+                  >
+                    <item.icon className={`w-5 h-5 shrink-0 ${activeView === item.label ? 'animate-pulse' : 'opacity-60 group-hover:opacity-100'}`} />
+                    <span className="font-black text-xs uppercase tracking-widest">{item.label}</span>
+                  </button>
+                ))
+              )}
             </div>
 
             <div className="pt-10 border-t border-[var(--color-border)] space-y-4">
@@ -132,8 +271,8 @@ export default function Dashboard() {
           <div className="p-8">
             <div className="bg-gradient-to-br from-[var(--color-accent)]/20 to-purple-600/20 rounded-3xl p-6 border border-[var(--color-accent)]/20 relative overflow-hidden group cursor-pointer shadow-inner">
               <div className="absolute top-0 right-0 w-20 h-20 bg-[var(--color-accent)] opacity-10 blur-2xl rounded-full translate-x-1/2 -translate-y-1/2"></div>
-              <p className="text-xs font-black text-[var(--color-heading)] mb-2 uppercase tracking-widest">Elite Plan</p>
-              <p className="text-[10px] text-[var(--color-text-muted)] font-bold mb-5 leading-relaxed">Unlimited AI Coaching sessions unlocked for your success.</p>
+              <p className="text-xs font-black text-[var(--color-heading)] mb-2 uppercase tracking-widest">{userRole === 'employer' ? 'Enterprise Plan' : 'Elite Plan'}</p>
+              <p className="text-[10px] text-[var(--color-text-muted)] font-bold mb-5 leading-relaxed">{userRole === 'employer' ? 'Unlimited job postings and AI matching.' : 'Unlimited AI Coaching sessions unlocked for your success.'}</p>
               <button className="w-full py-3 bg-[var(--color-heading)] text-[var(--color-bg)] rounded-xl text-[10px] font-black tracking-[0.2em] uppercase hover:scale-105 transition-all">Manage Plan</button>
             </div>
           </div>
@@ -205,8 +344,12 @@ export default function Dashboard() {
 
       {/* MAIN CONTENT */}
       <main className="flex-grow p-10 space-y-12 overflow-y-auto">
-        {/* PAGE HEADER */}
-        <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-8">
+        {userRole === 'employer' ? (
+          <EmployerDashboard activeView={activeView} setActiveView={setActiveView} />
+        ) : (
+          <>
+            {/* PAGE HEADER */}
+            <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-8">
           <div className="space-y-2">
             <h1 className="text-3xl font-display font-bold text-[var(--color-heading)] tracking-tight leading-tight">
               {activeView === 'Overview' ? `Welcome back, ${user?.firstName || 'Hero'} 👋` : activeView}
@@ -290,7 +433,15 @@ export default function Dashboard() {
                       </div>
                       <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
                         <button onClick={() => setSelectedJob(job)} className="btn-secondary py-3 px-6 text-[10px] font-black tracking-widest uppercase flex-1 shadow-md">Details</button>
-                        <button onClick={() => navigate('/upload-resume')} className="btn-primary py-3 px-6 text-[10px] font-black tracking-widest uppercase flex-1 shadow-md shadow-blue-500/20 hover:-translate-y-1 transition-transform">Apply</button>
+                        <button 
+                          onClick={() => handleApplyClick(job)} 
+                          disabled={appliedJobs.includes(job._id)}
+                          className={`py-3 px-6 text-[10px] font-black tracking-widest uppercase flex-1 shadow-md transition-transform ${
+                            appliedJobs.includes(job._id) ? 'bg-green-600/20 text-green-400 border border-green-500/30 cursor-default' : 'btn-primary shadow-blue-500/20 hover:-translate-y-1'
+                          }`}
+                        >
+                          {appliedJobs.includes(job._id) ? 'Applied ✓' : 'Apply'}
+                        </button>
                       </div>
                     </div>
                   ))}
@@ -393,7 +544,15 @@ export default function Dashboard() {
                       </div>
                       <div className="pt-8 mt-8 border-t border-[var(--color-border)] flex gap-4">
                          <button onClick={() => setSelectedJob(job)} className="btn-secondary py-3 flex-1 text-[10px] font-black uppercase tracking-[0.2em] bg-[var(--color-surface-2)] border-[var(--color-border)] hover:bg-[var(--color-border)] transition-all">Details</button>
-                         <button onClick={() => navigate('/upload-resume')} className="btn-primary py-3 flex-1 text-[10px] font-black uppercase tracking-[0.2em] shadow-lg shadow-blue-500/20 hover:-translate-y-1 transition-all">Apply</button>
+                         <button 
+                          onClick={() => handleApplyClick(job)} 
+                          disabled={appliedJobs.includes(job._id)}
+                          className={`py-3 flex-1 text-[10px] font-black uppercase tracking-[0.2em] transition-all ${
+                            appliedJobs.includes(job._id) ? 'bg-green-600/20 text-green-400 border border-green-500/30 cursor-default rounded-xl' : 'btn-primary shadow-lg shadow-blue-500/20 hover:-translate-y-1'
+                          }`}
+                        >
+                          {appliedJobs.includes(job._id) ? 'Applied ✓' : 'Apply'}
+                        </button>
                       </div>
                    </div>
                 ))}
@@ -411,9 +570,50 @@ export default function Dashboard() {
                 <p className="text-sm font-medium text-[var(--color-text-muted)] italic max-w-sm mx-auto opacity-70">Our AI is currently prioritizing your profile matrix. This module will be synchronized shortly.</p>
              </div>
              <button onClick={() => setActiveView('Overview')} className="btn-secondary py-3 px-10 text-[10px] font-black uppercase tracking-widest bg-[var(--color-surface-2)] border-[var(--color-border)] hover:border-[var(--color-accent)]/30 transition-all">Synchronize Dashboard</button>
-          </div>
+        </div>
+      )}
+          </>
         )}
       </main>
+
+      {/* APPLY MODAL */}
+      {showApplyModal && jobToApply && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="relative w-full max-w-lg bg-[var(--color-bg)] rounded-[2rem] border border-[var(--color-border)] shadow-2xl p-8">
+            <button onClick={() => setShowApplyModal(false)} className="absolute top-6 right-6 w-8 h-8 flex items-center justify-center rounded-full bg-[var(--color-surface-2)] text-[var(--color-text-muted)] hover:bg-[var(--color-border)] transition-transform hover:scale-110">✕</button>
+            
+            <h2 className="text-2xl font-display font-black text-[var(--color-heading)] tracking-tight mb-2">Apply for {jobToApply.title}</h2>
+            <p className="text-sm text-[var(--color-text-muted)] mb-6">Please provide your details and resume to complete your application for {jobToApply.company}.</p>
+            
+            <form onSubmit={handleApplySubmit} className="space-y-4">
+              <div className="space-y-2">
+                <label className="text-[10px] uppercase font-black tracking-widest text-[var(--color-text-muted)]">Full Name</label>
+                <input required type="text" value={applyForm.name} onChange={(e) => setApplyForm({...applyForm, name: e.target.value})} className="w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-xl px-4 py-3 text-sm focus:border-[var(--color-accent)] focus:outline-none" placeholder="John Doe" />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] uppercase font-black tracking-widest text-[var(--color-text-muted)]">Email Address</label>
+                <input required type="email" value={applyForm.email} onChange={(e) => setApplyForm({...applyForm, email: e.target.value})} className="w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-xl px-4 py-3 text-sm focus:border-[var(--color-accent)] focus:outline-none" placeholder="john@example.com" />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] uppercase font-black tracking-widest text-[var(--color-text-muted)]">Phone Number</label>
+                <input required type="tel" value={applyForm.phone} onChange={(e) => setApplyForm({...applyForm, phone: e.target.value})} className="w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-xl px-4 py-3 text-sm focus:border-[var(--color-accent)] focus:outline-none" placeholder="+1 234 567 8900" />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] uppercase font-black tracking-widest text-[var(--color-text-muted)]">Resume File (PDF/DOCX)</label>
+                <input required type="file" accept=".pdf,.doc,.docx" onChange={(e) => setApplyFile(e.target.files[0])} className="w-full text-sm text-[var(--color-text-muted)] file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:uppercase file:tracking-widest file:bg-[var(--color-surface-2)] file:text-[var(--color-heading)] hover:file:bg-[var(--color-border)] cursor-pointer" />
+              </div>
+              
+              <div className="pt-4 flex gap-4">
+                <button type="button" onClick={() => setShowApplyModal(false)} className="btn-secondary py-4 px-8 text-[10px] font-black uppercase tracking-widest w-1/3">Cancel</button>
+                <button type="submit" disabled={isApplying} className="btn-primary py-4 px-8 text-[10px] font-black uppercase tracking-widest w-2/3 shadow-xl disabled:opacity-50">
+                  {isApplying ? 'Submitting...' : 'Submit Application'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

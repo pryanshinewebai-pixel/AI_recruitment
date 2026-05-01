@@ -1,5 +1,5 @@
 const express = require('express');
-const { requireAuth, requireAdmin } = require('../middlewares/auth');
+const { requireAuth, requireAdmin, requireEmployerOrAdmin } = require('../middlewares/auth');
 const Job = require('../models/Job');
 
 const router = express.Router();
@@ -17,8 +17,8 @@ router.get('/', async (req, res) => {
 });
 
 // @route   POST /api/jobs
-// @desc    Create a new job (admin only)
-router.post('/', requireAdmin, async (req, res) => {
+// @desc    Create a new job (employer/admin only)
+router.post('/', requireEmployerOrAdmin, async (req, res) => {
     try {
         const { title, company, companyWebsite, location, type, experienceLevel, description, requirements, salaryRange } = req.body;
         
@@ -36,8 +36,8 @@ router.post('/', requireAdmin, async (req, res) => {
 });
 
 // @route   PUT /api/jobs/:id
-// @desc    Update a job (admin only)
-router.put('/:id', requireAdmin, async (req, res) => {
+// @desc    Update a job (employer/admin only)
+router.put('/:id', requireEmployerOrAdmin, async (req, res) => {
     try {
         const { title, company, companyWebsite, location, type, experienceLevel, description, requirements, salaryRange, isActive } = req.body;
         
@@ -61,8 +61,8 @@ router.put('/:id', requireAdmin, async (req, res) => {
 });
 
 // @route   DELETE /api/jobs/:id
-// @desc    Delete a job (admin only)
-router.delete('/:id', requireAdmin, async (req, res) => {
+// @desc    Delete a job (employer/admin only)
+router.delete('/:id', requireEmployerOrAdmin, async (req, res) => {
     try {
         const deletedJob = await Job.findByIdAndDelete(req.params.id);
         if (!deletedJob) return res.status(404).json({ error: 'Job not found' });
@@ -70,6 +70,18 @@ router.delete('/:id', requireAdmin, async (req, res) => {
     } catch (error) {
         console.error('Error deleting job:', error);
         res.status(500).json({ error: 'Server error while deleting job' });
+    }
+});
+
+// @route   GET /api/jobs/employer
+// @desc    Get jobs posted by the logged in employer
+router.get('/employer', requireEmployerOrAdmin, async (req, res) => {
+    try {
+        const jobs = await Job.find({ postedBy: req.dbUser._id }).sort({ createdAt: -1 });
+        res.json(jobs);
+    } catch (error) {
+        console.error('Error fetching employer jobs:', error);
+        res.status(500).json({ error: 'Server error while fetching employer jobs' });
     }
 });
 

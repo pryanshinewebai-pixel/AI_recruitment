@@ -8,6 +8,7 @@ const userSchema = new mongoose.Schema({
     profileImageUrl: { type: String },
     username: { type: String },
     isAdmin: { type: Boolean, default: false },
+    role: { type: String, enum: ['candidate', 'employer', 'admin'], default: 'candidate' }
 }, { timestamps: true });
 
 const User = mongoose.model('User', userSchema);

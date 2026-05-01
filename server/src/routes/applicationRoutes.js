@@ -1,5 +1,5 @@
 const express = require('express');
-const { requireAuth, requireAdmin } = require('../middlewares/auth');
+const { requireAuth, requireAdmin, requireEmployerOrAdmin } = require('../middlewares/auth');
 const Application = require('../models/Application');
 const User = require('../models/User');
 const Job = require('../models/Job');
@@ -185,10 +185,10 @@ router.post('/', requireAuth, async (req, res) => {
             });
         }
 
-        // AUTOMATED AI ANALYSIS UPON SUBMISSION (Only for jobs posted by Admin)
+        // AUTOMATED AI ANALYSIS UPON SUBMISSION (Trigger for all jobs)
         const job = await Job.findById(jobId).populate('postedBy');
-        if (job && job.postedBy && job.postedBy.isAdmin) {
-            console.log('--- Triggering Automated AI Skill Analysis (Verified Admin Job) ---');
+        if (job) {
+            console.log(`--- Triggering Automated AI Skill Analysis for job: ${job.title} ---`);
             const jobDescription = `${job.title} at ${job.company}. Requirements: ${job.requirements.join(', ')}`;
             const analysisText = coverLetter || "Applied via platform. Resume at: " + resumeUrl;
 
@@ -227,6 +227,32 @@ router.get('/', requireAdmin, async (req, res) => {
         res.json(applications);
     } catch (error) {
         console.error('Error fetching applications:', error);
+        res.status(500).json({ error: 'Server error while fetching applications' });
+    }
+});
+
+// @route   GET /api/applications/employer
+// @desc    Get all applications for jobs posted by the logged-in employer
+router.get('/employer', requireEmployerOrAdmin, async (req, res) => {
+    try {
+        const user = req.dbUser;
+        // Find jobs posted by this employer or admin
+        const jobs = await Job.find({ postedBy: user._id }).select('_id title company');
+        const jobIds = jobs.map(j => j._id);
+        
+        console.log(`[Employer Fetch] User: ${user.firstName || user.email} (${user._id}), Jobs found: ${jobIds.length}`);
+
+        // Find applications for these jobs
+        const applications = await Application.find({ jobId: { $in: jobIds } })
+            .populate('userId', 'firstName lastName email profileImageUrl')
+            .populate('jobId', 'title company')
+            .sort({ createdAt: -1 });
+        
+        console.log(`[Employer Fetch] Applications found: ${applications.length} for Job IDs: ${jobIds}`);
+
+        res.json(applications);
+    } catch (error) {
+        console.error('Error fetching employer applications:', error);
         res.status(500).json({ error: 'Server error while fetching applications' });
     }
 });

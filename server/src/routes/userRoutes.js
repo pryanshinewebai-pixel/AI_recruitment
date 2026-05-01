@@ -34,6 +34,7 @@ router.get('/profile', requireAuth, async (req, res) => {
             message: 'Protected user data', 
             userId,
             isAdmin: user.isAdmin,
+            role: user.role,
             user: user
         });
     } catch (error) {
@@ -53,6 +54,33 @@ router.get('/sessions', requireAuth, async (req, res) => {
         res.json(sessions);
     } catch (error) {
         console.error('Error fetching sessions:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+router.put('/role', requireAuth, async (req, res) => {
+    try {
+        const userId = req.auth.userId;
+        const { role } = req.body;
+        
+        if (!['candidate', 'employer'].includes(role)) {
+            return res.status(400).json({ error: 'Invalid role' });
+        }
+        
+        const User = require('../models/User');
+        const updatedUser = await User.findOneAndUpdate(
+            { clerkId: userId },
+            { role: role },
+            { new: true }
+        );
+        
+        if (!updatedUser) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        res.json({ message: 'Role updated successfully', user: updatedUser });
+    } catch (error) {
+        console.error('Error updating role:', error);
         res.status(500).json({ error: 'Server error' });
     }
 });
